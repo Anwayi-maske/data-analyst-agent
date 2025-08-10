@@ -9,8 +9,17 @@ import subprocess
 import requests
 import pandas as pd
 from io import StringIO
+from fastapi import FastAPI
 
 app = FastAPI()
+
+# Add this root endpoint
+@app.get("/")
+async def root():
+    return {"message": "Welcome to Data Analyst Agent API. Use /api/ endpoint."}
+
+# ... rest of your existing code ...
+
 
 AIPIPE_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjIwMDM5OTJAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.dlQMi4pzdZ8yuaaHaUO5taTTpxlY-rXPf4cwgeHypp0"
 AIPIPE_API_URL = "https://aipipe.org/openai/v1/chat/completions"
