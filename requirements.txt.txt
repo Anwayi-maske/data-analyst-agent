@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+matplotlib
+beautifulsoup4
+requests
+openai
+python-multipart
+duckdb
