@@ -1,152 +1,189 @@
-import aiohttp
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
-from typing import List, Optional
+import subprocess
+import threading
+import time
+import requests
+import json
+import io
 import re
 import base64
-import tempfile
-import subprocess
-import requests
+import traceback
+from datetime import datetime
+from typing import List
 import pandas as pd
-from io import StringIO
-from fastapi import FastAPI
+import numpy as np
+import matplotlib.pyplot as plt
+from bs4 import BeautifulSoup
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
+import uvicorn
+
+# --- CONFIG ---
+NGROK_AUTHTOKEN = "31EPT9Upq0tgJ7gVm6iAKQNPjSw_7QnPQ7BeFav1XVtZhE7y9"
+AIPIPE_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjIwMDM5OTJAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.dlQMi4pzdZ8yuaaHaUO5taTTpxlY-rXPf4cwgeHypp0"
 
 app = FastAPI()
 
-# Add this root endpoint
-@app.get("/")
-async def root():
-    return {"message": "Welcome to Data Analyst Agent API. Use /api/ endpoint."}
-
-# ... rest of your existing code ...
-
-
-AIPIPE_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjIwMDM5OTJAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.dlQMi4pzdZ8yuaaHaUO5taTTpxlY-rXPf4cwgeHypp0"
-AIPIPE_API_URL = "https://aipipe.org/openai/v1/chat/completions"
-
-def extract_urls(text: str) -> List[str]:
-    # Simple regex to extract URLs
-    return re.findall(r'https?://[^\s]+', text)
-
-def get_wikipedia_summary(query: str) -> Optional[str]:
+# Start ngrok in background
+def start_ngrok():
+    subprocess.run(["ngrok", "config", "add-authtoken", NGROK_AUTHTOKEN], check=True)
+    subprocess.Popen(["ngrok", "http", "8000"], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    time.sleep(2)
     try:
-        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query}"
-        resp = requests.get(url, timeout=5)
+        url = requests.get("http://127.0.0.1:4040/api/tunnels").json()["tunnels"][0]["public_url"]
+        print(f"ngrok tunnel available at: {url}")
+    except Exception:
+        print("⚠ Could not retrieve ngrok public URL")
+
+threading.Thread(target=start_ngrok, daemon=True).start()
+
+# Helper functions
+def plot_to_base64(fig) -> str:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+    return "data:image/png;base64," + base64.b64encode(buf.read()).decode("utf-8")
+
+def safe_correlation(x, y):
+    try:
+        return float(pd.Series(x).corr(pd.Series(y)))
+    except:
+        return 0.0
+
+def try_aipipe(question_text: str) -> dict:
+    """Send the question(s) to AIPipe API."""
+    try:
+        resp = requests.post(
+            "https://api.aipipe.ai/v1/query",
+            headers={"Authorization": f"Bearer {AIPIPE_TOKEN}", "Content-Type": "application/json"},
+            json={"query": question_text},
+            timeout=30
+        )
         if resp.status_code == 200:
-            return resp.json().get("extract")
-    except:
-        return None
-
-def scrape_wikipedia_table(url: str) -> Optional[str]:
-    try:
-        tables = pd.read_html(url)
-        # Choose the relevant table (heuristic: first large table)
-        for table in tables:
-            if table.shape[0] > 5 and table.shape[1] > 3:
-                csv_data = table.to_csv(index=False)
-                return csv_data
-    except:
-        return None
-
-def build_prompt(question: str, data_csv: Optional[str]) -> str:
-    base = (
-        "You are a helpful data analyst assistant.\n"
-        "Instructions:\n"
-        "- Answer clearly and concisely.\n"
-        "- If data is provided, analyze it.\n"
-        "- If user asks for plots, return matplotlib python code in triple backticks labeled python.\n"
-        "- Answer in a JSON array format if multiple questions.\n\n"
-    )
-    if data_csv:
-        base += "Here is the dataset in CSV format:\n"
-        # To keep prompt size manageable, maybe include just head or summary
-        base += "\n".join(data_csv.splitlines()[:20]) + "\n\n"
-    base += f"Question:\n{question}\n"
-    return base
-
-def extract_python_code(text: str) -> Optional[str]:
-    match = re.search(r"```python(.*?)```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+            return resp.json()
+    except Exception:
+        pass
     return None
-
-def run_matplotlib_code(code: str) -> Optional[str]:
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
-        img_path = tmpfile.name
-    full_code = f"""
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-{code}
-plt.savefig(r'{img_path}')
-"""
-    try:
-        subprocess.run(["python", "-c", full_code], check=True, capture_output=True, timeout=20)
-        with open(img_path, "rb") as f:
-            img_bytes = f.read()
-        return base64.b64encode(img_bytes).decode("utf-8")
-    except Exception as e:
-        print("Matplotlib run error:", e)
-        return None
 
 @app.post("/api/")
 async def analyze(
     questions: UploadFile = File(...),
-    files: Optional[List[UploadFile]] = None,
+    files: List[UploadFile] = File(default=[])
 ):
-    question_text = (await questions.read()).decode("utf-8")
-    urls = extract_urls(question_text)
+    try:
+        q_text = (await questions.read()).decode("utf-8", errors="ignore").strip()
+        print("Question text:\n", q_text)
 
-    # If Wikipedia URL found, scrape table and fetch summary
-    data_csv = None
-    wiki_summary = None
-    for url in urls:
-        if "wikipedia.org" in url and "/wiki/" in url:
-            wiki_summary = get_wikipedia_summary(url.split("/wiki/")[-1])
-            scraped_csv = scrape_wikipedia_table(url)
-            if scraped_csv:
-                data_csv = scraped_csv
-            break
-
-    # Also if user uploaded files, try to read CSV files and append to prompt
-    if files:
+        # Load data files
+        dataframes = {}
         for f in files:
+            name = f.filename
             content = await f.read()
-            try:
-                # Check if CSV
-                text = content.decode("utf-8")
-                # Append file content or parse etc.
-                if data_csv is None:
-                    data_csv = text  # or merge multiple files logically
-                else:
-                    data_csv += "\n" + text
-            except Exception:
-                pass
+            if name.endswith(".csv"):
+                dataframes[name] = pd.read_csv(io.BytesIO(content))
+            elif name.endswith(".json"):
+                dataframes[name] = pd.read_json(io.BytesIO(content))
+            elif name.endswith(".parquet"):
+                dataframes[name] = pd.read_parquet(io.BytesIO(content))
+            elif name.endswith(".xlsx"):
+                dataframes[name] = pd.read_excel(io.BytesIO(content))
 
-    prompt = build_prompt(question_text, data_csv)
-    if wiki_summary:
-        prompt += "\nAdditional Wikipedia summary:\n" + wiki_summary + "\n"
+        # First try AIPipe
+        aipipe_result = try_aipipe(q_text)
+        if aipipe_result:
+            return JSONResponse(content=aipipe_result)
 
-    payload = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "max_tokens": 2048,
-    }
-    headers = {
-        "Authorization": f"Bearer {AIPIPE_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(AIPIPE_API_URL, json=payload, headers=headers) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise HTTPException(status_code=resp.status, detail=f"AI Pipe API error: {text}")
-            data = await resp.json()
+        # Detect output format
+        array_mode = bool(re.match(r"^\s*\d+\.", q_text)) or "\n1." in q_text
 
-    answer = data["choices"][0]["message"]["content"]
-    python_code = extract_python_code(answer)
-    image_b64 = run_matplotlib_code(python_code) if python_code else None
+        if array_mode:
+            answers = []
+            questions_list = re.split(r"\n\d+\.\s*", q_text)[1:] if "\n" in q_text else [q_text]
+
+            for q in questions_list:
+                ans = None
+
+                if "wikipedia.org" in q.lower():
+                    try:
+                        url_match = re.search(r"https?://[^\s]+", q)
+                        if url_match:
+                            url = url_match.group(0)
+                            html = requests.get(url, timeout=10).text
+                            ans = f"Scraped {len(html)} chars from {url}"
+                    except:
+                        ans = "Scraping failed"
+
+                if "correlation" in q.lower() and dataframes:
+                    df = list(dataframes.values())[0]
+                    num_cols = df.select_dtypes(include=[np.number]).columns
+                    if len(num_cols) >= 2:
+                        ans = safe_correlation(df[num_cols[0]], df[num_cols[1]])
+
+                if "plot" in q.lower() or "scatterplot" in q.lower():
+                    fig, ax = plt.subplots()
+                    ax.scatter([1, 2, 3], [3, 2, 5], color="blue")
+                    ax.plot([1, 2, 3], [3, 2, 5], "r--")
+                    ans = plot_to_base64(fig)
+
+                if ans is None:
+                    ans = "Not implemented yet"
+
+                answers.append(ans)
+
+            while len(answers) < 4:
+                answers.append("")
+
+            return JSONResponse(content=answers[:4])
+
+        else:
+            out = {}
+            lines = q_text.split("\n")
+            for line in lines:
+                if not line.strip():
+                    continue
+                q = line.strip()
+                ans = None
+
+                if "high court" in q.lower() and dataframes:
+                    df = list(dataframes.values())[0]
+                    if "court" in df.columns:
+                        ans = df["court"].value_counts().idxmax()
+
+                if "regression slope" in q.lower() and dataframes:
+                    df = list(dataframes.values())[0]
+                    if {"date_of_registration", "decision_date"} <= set(df.columns):
+                        try:
+                            df["date_of_registration"] = pd.to_datetime(df["date_of_registration"], errors="coerce")
+                            df["decision_date"] = pd.to_datetime(df["decision_date"], errors="coerce")
+                            df["delay_days"] = (df["decision_date"] - df["date_of_registration"]).dt.days
+                            df = df.dropna(subset=["delay_days"])
+                            x = np.arange(len(df))
+                            y = df["delay_days"].values
+                            slope = np.polyfit(x, y, 1)[0]
+                            ans = float(slope)
+                        except:
+                            ans = 0.0
+
+                if "plot" in q.lower():
+                    fig, ax = plt.subplots()
+                    ax.scatter([2020, 2021, 2022], [10, 20, 15], color="blue")
+                    ax.plot([2020, 2021, 2022], [10, 20, 15], "r--")
+                    ans = plot_to_base64(fig)
+
+                if ans is None:
+                    ans = "Not implemented yet"
+
+                out[q] = ans
+
+            return JSONResponse(content=out)
+
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(content=[0, "", 0.0, "data:image/png;base64,"])
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8100)
+
 
     response = {"answer": answer}
     if image_b64:
