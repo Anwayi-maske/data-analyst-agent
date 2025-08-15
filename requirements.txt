@@ -8,3 +8,8 @@ openai
 python-multipart
 duckdb
 aiohttp
+numpy
+seaborn
+scikit-learn
+openpyxl
+pyarrow
