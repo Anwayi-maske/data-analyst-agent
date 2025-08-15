@@ -10,11 +10,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 from bs4 import BeautifulSoup
 import requests
+import os
 
 # ---- CONFIG ----
-AIPIPE_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjIwMDM5OTJAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.dlQMi4pzdZ8yuaaHaUO5taTTpxlY-rXPf4cwgeHypp0"
+AIPIPE_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbG1haWwiOiIyM2YyMDAzOTkyQGRzLnN0dWR5Lmlp...."  # Replace with your token
 
-app = FastAPI(title="Data Analyst Agent API", docs_url="/docs")
+# Initialize FastAPI
+app = FastAPI(
+    title="Data Analyst Agent API",
+    description="Upload questions.txt and optional data files (CSV, JSON, Parquet, XLSX).",
+    version="1.0.0",
+    docs_url="/docs"  # Swagger UI
+)
 
 # ---- HELPERS ----
 def plot_to_base64(fig) -> str:
@@ -82,7 +89,10 @@ def process_question(q, dataframes):
 
 # ---- API ENDPOINT ----
 @app.post("/api/")
-async def analyze(questions: UploadFile = File(...), files: List[UploadFile] = File(default=[])):
+async def analyze(
+    questions: UploadFile = File(...),
+    files: List[UploadFile] = File(default=[])
+):
     try:
         q_text = (await questions.read()).decode("utf-8", errors="ignore").strip()
 
@@ -118,3 +128,14 @@ async def analyze(questions: UploadFile = File(...), files: List[UploadFile] = F
     except Exception as e:
         traceback.print_exc()
         return JSONResponse(content={"error": str(e)})
+
+# ---- ENTRYPOINT ----
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        log_level="info"
+    )
+
