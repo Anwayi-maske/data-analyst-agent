@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from functools import lru_cache
 
 # ---- CONFIG ----
-AIPIPE_TOKEN = "YOUR_AIPIPE_TOKEN"  # Replace with your token
+AIPIPE_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjIwMDM5OTJAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.dlQMi4pzdZ8yuaaHaUO5taTTpxlY-rXPf4cwgeHypp0"  # Replace with your token
 AIPIPE_BASE_URL = "https://aipipe.org/openai/v1"  # OpenAI-compatible base URL
 
 # Initialize FastAPI
