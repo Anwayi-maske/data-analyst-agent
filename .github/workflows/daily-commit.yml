@@ -2,8 +2,8 @@ name: Daily Commit by 23f2003992@ds.study.iitm.ac.in
 
 on:
   schedule:
-    - cron: '0 22 * * *'  # Runs daily at 10 PM UTC (pick any specific time, e.g., 22:00)
-  workflow_dispatch:      # Lets you test manually
+    - cron: '0 22 * * *'  # 10 PM UTC daily
+  workflow_dispatch:
 
 jobs:
   commit:
@@ -12,11 +12,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main  # ← CRITICAL: specify your default branch
+          fetch-depth: 0
 
       - name: Update status file by 23f2003992@ds.study.iitm.ac.in
         run: |
-          echo "$(date): Daily automated update" >> STATUS.md
+          echo "$(date): Daily automated update #$(date +%s)" >> STATUS.md
 
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Daily commit $(date)"
+          commit_message: "Daily update $(date)"
+          file_pattern: STATUS.md
